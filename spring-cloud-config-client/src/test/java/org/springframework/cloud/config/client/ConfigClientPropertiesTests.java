@@ -16,6 +16,7 @@
 package org.springframework.cloud.config.client;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 
 import org.junit.Test;
 import org.springframework.boot.test.util.EnvironmentTestUtils;
@@ -39,6 +40,30 @@ public class ConfigClientPropertiesTests {
 		assertEquals("user", locator.getUsername());
 		assertEquals("secret", locator.getPassword());
 	}
+	
+	@Test
+	public void noCredentials() {
+		locator.setUri("http://localhost:9999");
+		assertEquals("http://localhost:9999", locator.getRawUri());
+		assertNull(locator.getUsername());
+		assertNull(locator.getPassword());
+	}
+	
+	@Test(expected=IllegalStateException.class)
+	public void invalidConfig() {
+		locator.setUri(null);
+		locator.getRawUri();
+	}
+	
+	@Test
+	public void exlicitUsername() {
+		locator.setUri("http://localhost:9999");
+		locator.setUsername("foo");
+		locator.setPassword("secret");
+		assertEquals("http://localhost:9999", locator.getRawUri());
+		assertEquals("foo", locator.getUsername());
+		assertEquals("secret", locator.getPassword());
+	}
 
 	@Test
 	public void uriCreds() {
@@ -57,6 +82,24 @@ public class ConfigClientPropertiesTests {
 		assertEquals("secret", locator.getPassword());
 	}
 
+	@Test
+	public void urlUserNameAndExplicitPassword() {
+		locator.setUri("http://foo@localhost:9999");
+		locator.setPassword("secret");
+		assertEquals("http://localhost:9999", locator.getRawUri());
+		assertEquals("foo", locator.getUsername());
+		assertEquals("secret", locator.getPassword());
+	}
+	
+	@Test
+	public void ignoreExplicitUsernameWithoutExplicitPassword() {
+		locator.setUri("http://foo:bar@localhost:9999");
+		locator.setUsername("foo2");
+		assertEquals("http://localhost:9999", locator.getRawUri());
+		assertEquals("foo", locator.getUsername());
+		assertEquals("bar", locator.getPassword());
+	}
+	
 	@Test
 	public void changeNameInOverride() {
 		locator.setName("one");
