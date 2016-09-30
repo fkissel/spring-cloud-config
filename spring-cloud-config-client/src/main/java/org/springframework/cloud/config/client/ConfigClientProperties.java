@@ -16,6 +16,8 @@
 
 package org.springframework.cloud.config.client;
 
+import static java.util.Objects.requireNonNull;
+
 import java.net.MalformedURLException;
 import java.net.URL;
 
@@ -28,10 +30,93 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 /**
  * @author Dave Syer
+ * @author Felix Kissel
  *
  */
 @ConfigurationProperties(ConfigClientProperties.PREFIX)
 public class ConfigClientProperties {
+	
+	private static final String DEFAULT_USERNAME_user = "user";
+
+	private static class UsernamePasswordPair {
+
+		private final String username;
+		
+		private final String password;
+
+		public UsernamePasswordPair(String username, String password) {
+			this.username = StringUtils.hasText(username) ? username.trim() : null;
+			this.password = StringUtils.hasText(password) ? password.trim() : null;
+		}
+
+		public String getUsername() {
+			return username;
+		}
+		
+		public String getPassword() {
+			return password;
+		}
+		
+		@Override
+		public String toString() {
+			return getClass().getSimpleName() + " [username=" + username + ", password=*******]";
+		}
+		
+		public UsernamePasswordPair copyAndComplementWith(UsernamePasswordPair usernamePasswordPair) {
+			String username = this.username != null ? this.username : usernamePasswordPair.getUsername();
+			String password = this.password != null ? this.password : usernamePasswordPair.getPassword();
+			return new UsernamePasswordPair(username, password);
+		}
+
+		public Credentials toCredentialsOrNull() {
+			if(this.password == null) {
+				return null;
+			}
+			return new Credentials(this.username == null ? DEFAULT_USERNAME_user : this.username, this.password);
+		}
+
+	}
+	
+	private static class Credentials extends UsernamePasswordPair{
+
+		public Credentials(String username, String password) {
+			super(requireNonNull(username), requireNonNull(password));
+		}
+
+		@Override
+		public String toString() {
+			return "Credentials [getUsername()=" + getUsername() + ", getPassword()=******]";
+		}
+		
+	}
+	
+	private static class ConfigServerConnectionParameters {
+
+		private final String rawUri;
+		
+		private final Credentials credentials;
+
+
+		public ConfigServerConnectionParameters(String rawUri, Credentials credentials) {
+			this.rawUri = rawUri;
+			this.credentials = credentials;
+		}
+
+		public String getRawUri() {
+			return rawUri;
+		}
+
+		public Credentials getCredentials() {
+			return credentials;
+		}
+		
+		@Override
+		public String toString() {
+			return "ConfigServerEndpoint [rawUri=" + rawUri + ", credentials="
+					+ credentials + "]";
+		}
+
+	}
 
 	public static final String PREFIX = "spring.cloud.config";
 	public static final String TOKEN_HEADER = "X-Config-Token";
@@ -115,7 +200,7 @@ public class ConfigClientProperties {
 	}
 
 	public String getRawUri() {
-		return extractCredentials()[2];
+		return extractCredentials().getRawUri();
 	}
 
 	public String getUri() {
@@ -151,7 +236,8 @@ public class ConfigClientProperties {
 	}
 
 	public String getUsername() {
-		return extractCredentials()[0];
+		Credentials credentials = extractCredentials().getCredentials();
+		return credentials == null ? null : credentials.getUsername(); 
 	}
 
 	public void setUsername(String username) {
@@ -159,7 +245,8 @@ public class ConfigClientProperties {
 	}
 
 	public String getPassword() {
-		return extractCredentials()[1];
+		Credentials credentials = extractCredentials().getCredentials();
+		return credentials == null ? null : credentials.getPassword(); 
 	}
 
 	public void setPassword(String password) {
@@ -198,52 +285,45 @@ public class ConfigClientProperties {
 		this.authorization = authorization;
 	}
 
-
-
-	private String[] extractCredentials() {
-		String[] result = new String[3];
-		String uri = this.uri;
-		result[2] = uri;
-		String[] creds = getUsernamePassword();
-		result[0] = creds[0];
-		result[1] = creds[1];
+	
+	protected ConfigServerConnectionParameters extractCredentials() {
+		UsernamePasswordPair explicitCredentials = getExplicitCredentials();
 		try {
-			URL url = new URL(uri);
+			URL url = new URL(this.uri);
 			String userInfo = url.getUserInfo();
-			if (StringUtils.isEmpty(userInfo) || ":".equals(userInfo)) {
-				return result;
-			}
-			String bare = UriComponentsBuilder.fromHttpUrl(uri).userInfo(null).build()
-					.toUriString();
-			result[2] = bare;
-			if (!userInfo.contains(":")) {
-				userInfo = userInfo + ":";
-			}
-			String[] split = userInfo.split(":");
-			result[0] = split[0];
-			result[1] = split[1];
-			if (creds[1] != null) {
-				// Explicit username / password takes precedence
-				result[1] = creds[1];
-				if ("user".equals(creds[0])) {
-					// But the username can be overridden
-					result[0] = split[0];
-				}
-			}
-			return result;
+			String uriWithoutCredentials = UriComponentsBuilder.fromHttpUrl(this.uri).userInfo(null)
+					.build().toUriString();
+			UsernamePasswordPair uriCredentials = parseUserInfoString(userInfo);
+			UsernamePasswordPair mergedCredentials = explicitCredentials.copyAndComplementWith(uriCredentials);
+
+			Credentials resultCredentials = mergedCredentials.toCredentialsOrNull();
+			return new ConfigServerConnectionParameters(uriWithoutCredentials, resultCredentials);
 		}
 		catch (MalformedURLException e) {
 			throw new IllegalStateException("Invalid URL: " + uri);
 		}
 	}
-
-	private String[] getUsernamePassword() {
-		if (StringUtils.hasText(this.password)) {
-			return new String[] {
-					StringUtils.hasText(this.username) ? this.username.trim() : "user",
-					this.password.trim() };
+	
+	private static UsernamePasswordPair parseUserInfoString(String userInfo) {
+		if(userInfo == null || userInfo.trim().equals(":")) {
+			return new UsernamePasswordPair(null, null);
 		}
-		return new String[2];
+		if (userInfo.contains(":")) {
+			String[] split = userInfo.split(":", -1);
+			return new UsernamePasswordPair(split[0], split[1]);
+		}
+		else {
+			return new UsernamePasswordPair(userInfo, null);
+		}
+	}
+
+	private UsernamePasswordPair getExplicitCredentials() {
+		if (StringUtils.hasText(this.password)) {
+			return new UsernamePasswordPair(this.username, this.password);
+		}
+		else {
+			return new UsernamePasswordPair(null, null);
+		}
 	}
 
 	public static class Discovery {
